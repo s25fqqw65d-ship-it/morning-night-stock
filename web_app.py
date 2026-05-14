@@ -360,7 +360,7 @@ with tab2:
             st.subheader(f"🔥 決選名單 (已套用大盤權重) 🔥")
             st.dataframe(df_all, use_container_width=True, hide_index=True, column_config=column_config)
         else:
-            st.warning("未能找到符合條件的股票。")    position = 0
+            st.warning("未能找到符合條件的股票。")
     buy_price = 0
     trades = []
     
