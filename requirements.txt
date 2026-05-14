@@ -3,3 +3,5 @@ FinMind
 yfinance
 pandas
 numpy
+tqdm
+requests
