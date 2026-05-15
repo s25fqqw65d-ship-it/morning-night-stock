@@ -241,7 +241,6 @@ tab1, tab2 = st.tabs(["單股解析", "產業海選"])
 with tab1:
     st.markdown(f"**大盤環境指示：** {market_status_text}")
     c_in, c_cap, c_btn = st.columns([2, 1, 1])
-    # 這裡升級了！提示框改為可以輸入代號或名稱
     target_input = c_in.text_input("輸入股票代號或名稱 (如: 2330 或 台積電)", "2330")
     enable_cap = c_cap.checkbox("計算資金部位")
     btn_single = c_btn.button("啟動深度解析", use_container_width=True)
@@ -249,11 +248,10 @@ with tab1:
 
     if btn_single:
         user_query = target_input.strip()
-        # 尋找符合「代號」或「名稱」的股票
         match_df = tw_stocks_df[(tw_stocks_df['stock_id'] == user_query) | (tw_stocks_df['stock_name'] == user_query)]
         
         if match_df.empty: 
-            st.markdown(f"**錯誤：** 找不到代號或名稱為「{user_query}」的股票。")
+            st.error(f"**錯誤：** 找不到代號或名稱為「{user_query}」的股票。")
         else:
             real_code = match_df['stock_id'].values[0]
             real_name = match_df['stock_name'].values[0]
@@ -266,12 +264,20 @@ with tab1:
                 try: ai_val = float(r['AI勝率'].replace('%',''))
                 except: ai_val = 50.0
 
-                if r['收盤價'] >= r['布林上軌']: diag = f"⚠️ 極度過熱警告：股價已觸及布林上軌 (\${r['布林上軌']})，短線乖離過大，極易面臨拉回，請勿追高。"
-                elif r['綜合分數'] >= 80 and ai_val > 55: diag = f"多頭強勢：AI 看漲機率高 ({r['AI勝率']})。支撐位 \${r['明日支撐']} 可注意，跌破 \${r['動態停利']} 離場。"
-                elif ai_val < 40: diag = f"風險警告：AI 判定短線過熱，勝率僅 {r['AI勝率']}。建議不追高，等回測 \${r['明日支撐']}。"
-                elif r['收盤價'] < r['VWAP大戶成本']: diag = f"弱勢整理：股價低於大戶成本 \${r['VWAP大戶成本']}，上方賣壓重，暫避開。"
-                else: diag = f"震盪格局：目前動能中性。防守位為 \${r['防守價']}。"
-                st.markdown(f"> **系統綜合診斷：** {diag}")
+                st.markdown("## 🎯 系統最終判定與明日劇本")
+                
+                if r['收盤價'] >= r['布林上軌']: 
+                    st.error(f"🚨 **【極度過熱 - 嚴禁追高】**\n\n股價已觸及布林上軌 (\${r['布林上軌']})，短線隨時面臨主力獲利了結賣壓。空手者請觀望，持股者可考慮逢高減碼。")
+                elif r['綜合分數'] >= 80 and ai_val <= 45: 
+                    st.warning(f"⚠️ **【誘多警告 - 逢低再接】**\n\n雖然籌碼與趨勢極佳（系統評分 {r['綜合分數']}分），但 AI 預測明日勝率僅 {r['AI勝率']}。主力極可能開高走低洗盤！\n\n👉 **行動劇本：** 明日若見急拉至壓力區 \${r['明日壓力']} 切勿追高，請耐心等回測支撐 \${r['明日支撐']} 再進場。")
+                elif r['綜合分數'] >= 80 and ai_val > 55: 
+                    st.success(f"🚀 **【強勢多頭 - 綠燈通行】**\n\n趨勢、籌碼與 AI 預測達成高度共識！\n\n👉 **行動劇本：** 可於目前價位或支撐 \${r['明日支撐']} 附近分批佈局。嚴守跌破動態停利線 \${r['動態停利']} 停損出場。")
+                elif r['收盤價'] < r['VWAP大戶成本']: 
+                    st.info(f"❄️ **【弱勢套牢 - 嚴格避開】**\n\n目前股價低於大戶均價 \${r['VWAP大戶成本']}，上方套牢賣壓沉重，資金效率低，請勿進場接刀。")
+                else: 
+                    st.info(f"⚖️ **【震盪整理 - 靜待表態】**\n\n目前多空不明，缺乏爆發動能。\n\n👉 **行動劇本：** 防守底線為 \${r['防守價']}，建議空手觀望，靜待量能放大。")
+                
+                st.markdown("---")
 
                 c_t, c_a = st.columns([3, 1])
                 c_t.markdown(f"### {r['代號']} {r['名稱']} 戰情報告")
