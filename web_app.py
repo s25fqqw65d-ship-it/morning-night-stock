@@ -34,7 +34,8 @@ def get_market_status():
 
 # 側邊欄與資料讀取
 st.sidebar.header("系統設定")
-finmind_token = st.sidebar.text_input("輸入 FinMind Token", type="password", help="留空即為訪客模式")
+st.sidebar.markdown("若頻繁查詢導致沒畫面，請至 [FinMind 官網](https://finmindtrade.com/) 免費註冊獲取 Token。")
+finmind_token = st.sidebar.text_input("輸入 FinMind Token", type="password", help="留空即為訪客模式 (每小時300次額度)")
 
 @st.cache_data(ttl=86400) 
 def load_taiwan_stocks():
@@ -52,10 +53,9 @@ market_status_text, market_multiplier = get_market_status()
 def get_news_sentiment(stock_code):
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_code}/news"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        res = requests.get(url, headers=headers, timeout=3)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=2) # 縮短為 2 秒，超時直接放棄
+        res.raise_for_status()
         soup = BeautifulSoup(res.text, 'html.parser')
 
         headlines = []
@@ -66,8 +66,8 @@ def get_news_sentiment(stock_code):
         
         headlines = headlines[:8] 
 
-        bullish_kw = ['創高', '成長', '受惠', '看好', '大增', '突破', '買超', '利多', '漲停', '報喜', '優於預期', '接單', '強攻']
-        bearish_kw = ['衰退', '大跌', '降評', '砍單', '下修', '看壞', '賣超', '利空', '跌破', '探底', '保守', '出脫', '重挫']
+        bullish_kw = ['創高', '成長', '受惠', '看好', '大增', '突破', '買超', '利多', '漲停', '報喜', '接單', '強攻', '反彈']
+        bearish_kw = ['衰退', '大跌', '降評', '砍單', '下修', '看壞', '賣超', '利空', '跌破', '探底', '保守', '重挫', '出脫']
 
         bull_score = sum(1 for t in headlines for k in bullish_kw if k in t)
         bear_score = sum(1 for t in headlines for k in bearish_kw if k in t)
@@ -88,6 +88,7 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
         df_price = dl.taiwan_stock_daily(stock_id=stock_code, start_date=start_dt) 
         df_chip = dl.taiwan_stock_institutional_investors(stock_id=stock_code, start_date='2024-02-01')
         
+        # ⚠️ 這裡如果額度爆了，df_price 會是空的，就會回傳 None
         if df_price.empty or df_chip.empty or len(df_price) < 60: return None
 
         last_close = df_price.iloc[-1]['close']
@@ -113,7 +114,6 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
         foreign_net = int((df_chip[df_chip['name']=='Foreign_Investor'].iloc[-3:]['buy'].sum() - df_chip[df_chip['name']=='Foreign_Investor'].iloc[-3:]['sell'].sum()) / 1000)
         trust_net = int((df_chip[df_chip['name']=='Investment_Trust'].iloc[-3:]['buy'].sum() - df_chip[df_chip['name']=='Investment_Trust'].iloc[-3:]['sell'].sum()) / 1000)
 
-        # 新聞輿情：只有在「單股模式」才啟動，避免海選卡死！
         news_status, news_score, latest_headlines = "未掃描", 0, []
         rev_status, rev_score = "無資料", 0
         
@@ -128,7 +128,6 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
 
         cdp = (today['max'] + today['min'] + 2 * today['close']) / 4
         
-        # 修復 TR 計算方式，確保動態停利線精準
         df_price['H-L'] = df_price['max'] - df_price['min']
         df_price['H-PC'] = abs(df_price['max'] - df_price['close'].shift(1))
         df_price['L-PC'] = abs(df_price['min'] - df_price['close'].shift(1))
@@ -137,7 +136,6 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
         swing_target = today['close'] + (atr_14 * 2.5)
         trailing_stop = df_price['max'].rolling(20).max().iloc[-1] - (atr_14 * 2.5)
 
-        # AI 引擎
         ai_prob = "50.0%"
         if is_single_mode and len(df_price) > 200:
             try:
@@ -149,7 +147,6 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
                 ai_prob = f"{clf.predict_proba(ml_df[['close', 'Volume', 'MA20', 'RSI']].iloc[-1:])[0][1]*100:.1f}%"
             except: ai_prob = "運算失敗"
 
-        # 評分與判定
         score = int((50 + (15 if today['MA5']>today['MA20'] else -15) + (25 if today['Volume']>prev['Vol_MA5']*1.5 else 0) + rev_score + news_score + (15 if today['close']>today['VWAP_20'] else 0)) * market_multiplier)
         action = "爆發前夕" if score >= 100 else "強勢佈局" if score >= 80 else "偏多觀察" if score >= 60 else "嚴格避開"
 
@@ -163,7 +160,9 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
             "新聞情緒": news_status, "最新標題": latest_headlines,
             "新聞": f"https://tw.stock.yahoo.com/quote/{stock_code}/news", "歷史資料": df_price 
         }
-    except: return None
+    except Exception as e: 
+        if is_single_mode: st.error(f"系統內部錯誤：{e}")
+        return None
 
 # ==========================================
 # 介面顯示邏輯
@@ -187,6 +186,8 @@ with tab1:
         else:
             with st.spinner("AI 運算與網路輿情掃描中..."):
                 r = analyze_stock(target_code.strip(), name_match.values[0], dl, is_single_mode=True)
+            
+            # ⚠️ 這裡加入了防呆警報！如果抓不到資料會告訴你原因
             if r:
                 st.markdown("---")
                 try: ai_val = float(r['AI勝率'].replace('%',''))
@@ -231,6 +232,8 @@ with tab1:
                     if diff > 0: st.markdown(f"**操作建議：** 建議買進 **{int(risk/(diff*1000))}** 張，風險控制於 2% 內。")
                 
                 st.link_button("進入 Yahoo 新聞中心看全文", r['新聞'], use_container_width=True)
+            else:
+                st.error("🚨 **系統無法產出報告！** \n\n可能原因：\n1. 您剛剛把 FinMind 每小時 300 次的**免費額度刷爆了**。\n2. 該檔股票近期暫無交易資料。\n\n👉 **解法：** 等待一小時後再用，或是去側邊欄點擊連結，免費註冊一組 Token 貼上來，就能無限暢遊！")
 
 with tab2:
     st.markdown("### 特定產業快速掃描")
@@ -246,3 +249,4 @@ with tab2:
             if out: res.append({"代號":out['代號'], "名稱":out['名稱'], "收盤價":out['收盤價'], "評分":out['綜合分數'], "判定":out['判定']})
             time.sleep(0.05)
         if res: st.dataframe(pd.DataFrame(res).sort_values("評分", ascending=False), use_container_width=True, hide_index=True)
+        else: st.error("🚨 掃描失敗。若是完全沒跑出任何股票，代表您的 FinMind 免費 API 額度已被耗盡！請註冊 Token 或稍後再試。")
