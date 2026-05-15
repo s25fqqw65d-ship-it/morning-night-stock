@@ -50,40 +50,36 @@ market_status_text, market_multiplier = get_market_status()
 # 核心大腦 1.5：新聞輿情分析爬蟲
 # ==========================================
 def get_news_sentiment(stock_code):
-    """爬取 Yahoo 財經新聞標題，進行多空關鍵字情緒分析"""
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_code}/news"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=5)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        res = requests.get(url, headers=headers, timeout=3)
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 抓取可能的新聞標題
         headlines = []
         for a in soup.find_all('a'):
             text = a.get_text().strip()
-            if len(text) > 12 and text not in headlines: # 標題通常大於 12 個字
+            if len(text) > 10 and text not in headlines: 
                 headlines.append(text)
         
-        headlines = headlines[:10] # 取最新 10 則新聞
+        headlines = headlines[:8] 
 
-        # 建立多空情緒字典
-        bullish_kw = ['創高', '成長', '受惠', '看好', '大增', '突破', '買超', '利多', '漲停', '報喜', '優於預期', '接單']
-        bearish_kw = ['衰退', '大跌', '降評', '砍單', '下修', '看壞', '賣超', '利空', '跌破', '探底', '保守', '出脫']
+        bullish_kw = ['創高', '成長', '受惠', '看好', '大增', '突破', '買超', '利多', '漲停', '報喜', '優於預期', '接單', '強攻']
+        bearish_kw = ['衰退', '大跌', '降評', '砍單', '下修', '看壞', '賣超', '利空', '跌破', '探底', '保守', '出脫', '重挫']
 
         bull_score = sum(1 for t in headlines for k in bullish_kw if k in t)
         bear_score = sum(1 for t in headlines for k in bearish_kw if k in t)
 
-        if bull_score > bear_score:
-            return "利多發酵", 10, headlines[:3]
-        elif bear_score > bull_score:
-            return "賣壓利空", -10, headlines[:3]
-        else:
-            return "情緒中性", 0, headlines[:3]
+        if bull_score > bear_score: return "利多發酵", 10, headlines[:3]
+        elif bear_score > bull_score: return "賣壓利空", -10, headlines[:3]
+        else: return "情緒中性", 0, headlines[:3]
     except:
         return "暫無新聞", 0, []
 
 # ==========================================
-# 核心大腦 2.0：分析模組 (含 AI、CDP、ATR、VWAP、新聞情緒)
+# 核心大腦 2.0：分析模組
 # ==========================================
 def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter="不限"):
     try:
@@ -117,9 +113,12 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
         foreign_net = int((df_chip[df_chip['name']=='Foreign_Investor'].iloc[-3:]['buy'].sum() - df_chip[df_chip['name']=='Foreign_Investor'].iloc[-3:]['sell'].sum()) / 1000)
         trust_net = int((df_chip[df_chip['name']=='Investment_Trust'].iloc[-3:]['buy'].sum() - df_chip[df_chip['name']=='Investment_Trust'].iloc[-3:]['sell'].sum()) / 1000)
 
-        # 營收
+        # 新聞輿情：只有在「單股模式」才啟動，避免海選卡死！
+        news_status, news_score, latest_headlines = "未掃描", 0, []
         rev_status, rev_score = "無資料", 0
+        
         if is_single_mode:
+            news_status, news_score, latest_headlines = get_news_sentiment(stock_code)
             try:
                 df_rev = dl.taiwan_stock_month_revenue(stock_id=stock_code, start_date='2023-01-01')
                 yoy = ((df_rev.iloc[-1]['revenue'] - df_rev.iloc[-13]['revenue']) / df_rev.iloc[-13]['revenue']) * 100
@@ -127,11 +126,13 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
                 rev_status = f"{'成長' if yoy>0 else '衰退'} ({yoy:.1f}%)"
             except: pass
 
-        # 新聞輿情分析
-        news_status, news_score, latest_headlines = get_news_sentiment(stock_code)
-
         cdp = (today['max'] + today['min'] + 2 * today['close']) / 4
-        df_price['TR'] = df_price[['max','min']].diff().abs().max(axis=1) 
+        
+        # 修復 TR 計算方式，確保動態停利線精準
+        df_price['H-L'] = df_price['max'] - df_price['min']
+        df_price['H-PC'] = abs(df_price['max'] - df_price['close'].shift(1))
+        df_price['L-PC'] = abs(df_price['min'] - df_price['close'].shift(1))
+        df_price['TR'] = df_price[['H-L', 'H-PC', 'L-PC']].max(axis=1)
         atr_14 = df_price['TR'].rolling(14).mean().iloc[-1]
         swing_target = today['close'] + (atr_14 * 2.5)
         trailing_stop = df_price['max'].rolling(20).max().iloc[-1] - (atr_14 * 2.5)
@@ -146,9 +147,9 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
                 clf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
                 clf.fit(train[['close', 'Volume', 'MA20', 'RSI']], train['Target'])
                 ai_prob = f"{clf.predict_proba(ml_df[['close', 'Volume', 'MA20', 'RSI']].iloc[-1:])[0][1]*100:.1f}%"
-            except: ai_prob = "計算失敗"
+            except: ai_prob = "運算失敗"
 
-        # 評分與判定 (加入新聞分數)
+        # 評分與判定
         score = int((50 + (15 if today['MA5']>today['MA20'] else -15) + (25 if today['Volume']>prev['Vol_MA5']*1.5 else 0) + rev_score + news_score + (15 if today['close']>today['VWAP_20'] else 0)) * market_multiplier)
         action = "爆發前夕" if score >= 100 else "強勢佈局" if score >= 80 else "偏多觀察" if score >= 60 else "嚴格避開"
 
@@ -159,7 +160,7 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
             "動態停利": round(trailing_stop, 1), "防守價": round(today['MA20'], 1),
             "綜合分數": score, "AI勝率": ai_prob, "營收動能": rev_status,
             "外資": foreign_net, "投信": trust_net, "判定": action,
-            "新聞情緒": news_status, "最新標題": latest_headlines, # 新增回傳值
+            "新聞情緒": news_status, "最新標題": latest_headlines,
             "新聞": f"https://tw.stock.yahoo.com/quote/{stock_code}/news", "歷史資料": df_price 
         }
     except: return None
@@ -188,7 +189,9 @@ with tab1:
                 r = analyze_stock(target_code.strip(), name_match.values[0], dl, is_single_mode=True)
             if r:
                 st.markdown("---")
-                ai_val = float(r['AI勝率'].replace('%',''))
+                try: ai_val = float(r['AI勝率'].replace('%',''))
+                except: ai_val = 50.0
+
                 if r['綜合分數'] >= 80 and ai_val > 55: diag = f"多頭強勢：AI 看漲機率高 ({r['AI勝率']})。支撐位 ${r['明日支撐']} 可注意，跌破 ${r['動態停利']} 離場。"
                 elif ai_val < 40: diag = f"風險警告：AI 判定短線過熱，勝率僅 {r['AI勝率']}。建議不追高，等回測 ${r['明日支撐']}。"
                 elif r['收盤價'] < r['VWAP大戶成本']: diag = f"弱勢整理：股價低於大戶成本 ${r['VWAP大戶成本']}，上方賣壓重，暫避開。"
@@ -213,13 +216,11 @@ with tab1:
                 m7.metric("大戶成本", f"${r['VWAP大戶成本']}", help="成交量加權平均價格")
                 m8.metric("法人動向", "偏多" if r['外資']>0 else "偏空", f"外:{r['外資']} / 投:{r['投信']}")
 
-                # 顯示最新新聞焦點
                 if r['最新標題']:
                     st.markdown("#### 📰 最新輿情焦點")
                     for title in r['最新標題']:
                         st.markdown(f"- {title}")
 
-                # 視覺化圖表
                 st.markdown("#### 價格走勢與關鍵防守線")
                 chart_data = r['歷史資料'].tail(60).set_index('date')
                 st.line_chart(pd.DataFrame({"股價":chart_data['close'], "月線":chart_data['MA20'], "大戶成本":chart_data['VWAP_20']}), color=["#FFFFFF", "#FF4B4B", "#00D4FF"])
@@ -242,6 +243,6 @@ with tab2:
         for i, (idx, row) in enumerate(targets.iterrows()):
             bar.progress((i+1)/len(targets))
             out = analyze_stock(row['stock_id'], row['stock_name'], dl, price_filter=s_p)
-            if out: res.append({"代號":out['代號'], "名稱":out['名稱'], "收盤價":out['收盤價'], "評分":out['綜合分數'], "輿情":out['新聞情緒'], "判定":out['判定']})
+            if out: res.append({"代號":out['代號'], "名稱":out['名稱'], "收盤價":out['收盤價'], "評分":out['綜合分數'], "判定":out['判定']})
             time.sleep(0.05)
         if res: st.dataframe(pd.DataFrame(res).sort_values("評分", ascending=False), use_container_width=True, hide_index=True)
