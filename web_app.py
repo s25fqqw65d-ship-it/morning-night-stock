@@ -54,7 +54,7 @@ def get_news_sentiment(stock_code):
     try:
         url = f"https://tw.stock.yahoo.com/quote/{stock_code}/news"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        res = requests.get(url, headers=headers, timeout=2) # 縮短為 2 秒，超時直接放棄
+        res = requests.get(url, headers=headers, timeout=2)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, 'html.parser')
 
@@ -79,18 +79,38 @@ def get_news_sentiment(stock_code):
         return "暫無新聞", 0, []
 
 # ==========================================
-# 核心大腦 2.0：分析模組
+# 核心大腦 2.0：分析模組 (內建抓蟲探照燈)
 # ==========================================
 def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter="不限"):
     try:
-        pe = yf.Ticker(f"{stock_code}.TW").info.get('trailingPE', 999)
+        # 1. 幫 Yahoo 加上防護罩
+        pe = 999
+        try: 
+            pe = yf.Ticker(f"{stock_code}.TW").info.get('trailingPE', 999)
+        except: 
+            pass
+
+        # 2. 抓取 FinMind 資料
         start_dt = '2022-01-01' if is_single_mode else '2023-06-01'
         df_price = dl.taiwan_stock_daily(stock_id=stock_code, start_date=start_dt) 
         df_chip = dl.taiwan_stock_institutional_investors(stock_id=stock_code, start_date='2024-02-01')
         
-        # ⚠️ 這裡如果額度爆了，df_price 會是空的，就會回傳 None
-        if df_price.empty or df_chip.empty or len(df_price) < 60: return None
+        # 3. 🚨 抓蟲探照燈：讓系統說出罷工原因
+        if is_single_mode:
+            if df_price.empty:
+                st.error(f"🕵️‍♂️ 抓蟲報告：FinMind 伺服器拒絕提供【{stock_code} 歷史股價】。可能原因：免費額度已滿或該股無資料。")
+                return None
+            if df_chip.empty:
+                st.error(f"🕵️‍♂️ 抓蟲報告：FinMind 伺服器拒絕提供【{stock_code} 三大法人籌碼】。")
+                return None
+            if len(df_price) < 60:
+                st.error(f"🕵️‍♂️ 抓蟲報告：【{stock_code}】歷史資料不足 60 天，無法計算季線防守。")
+                return None
+        else:
+            if df_price.empty or df_chip.empty or len(df_price) < 60: 
+                return None
 
+        # 4. 正常計算流程
         last_close = df_price.iloc[-1]['close']
         if not is_single_mode:
             if price_filter == "100元以下" and last_close >= 100: return None
@@ -161,7 +181,7 @@ def analyze_stock(stock_code, stock_name, dl, is_single_mode=False, price_filter
             "新聞": f"https://tw.stock.yahoo.com/quote/{stock_code}/news", "歷史資料": df_price 
         }
     except Exception as e: 
-        if is_single_mode: st.error(f"系統內部錯誤：{e}")
+        if is_single_mode: st.error(f"🕵️‍♂️ 抓蟲報告：系統內部發生預期外的錯誤 ({e})")
         return None
 
 # ==========================================
@@ -187,7 +207,6 @@ with tab1:
             with st.spinner("AI 運算與網路輿情掃描中..."):
                 r = analyze_stock(target_code.strip(), name_match.values[0], dl, is_single_mode=True)
             
-            # ⚠️ 這裡加入了防呆警報！如果抓不到資料會告訴你原因
             if r:
                 st.markdown("---")
                 try: ai_val = float(r['AI勝率'].replace('%',''))
@@ -233,7 +252,7 @@ with tab1:
                 
                 st.link_button("進入 Yahoo 新聞中心看全文", r['新聞'], use_container_width=True)
             else:
-                st.error("🚨 **系統無法產出報告！** \n\n可能原因：\n1. 您剛剛把 FinMind 每小時 300 次的**免費額度刷爆了**。\n2. 該檔股票近期暫無交易資料。\n\n👉 **解法：** 等待一小時後再用，或是去側邊欄點擊連結，免費註冊一組 Token 貼上來，就能無限暢遊！")
+                st.error("🚨 **系統終止產出報告！** (請參考上方的🕵️‍♂️抓蟲報告釐清原因)")
 
 with tab2:
     st.markdown("### 特定產業快速掃描")
@@ -249,4 +268,4 @@ with tab2:
             if out: res.append({"代號":out['代號'], "名稱":out['名稱'], "收盤價":out['收盤價'], "評分":out['綜合分數'], "判定":out['判定']})
             time.sleep(0.05)
         if res: st.dataframe(pd.DataFrame(res).sort_values("評分", ascending=False), use_container_width=True, hide_index=True)
-        else: st.error("🚨 掃描失敗。若是完全沒跑出任何股票，代表您的 FinMind 免費 API 額度已被耗盡！請註冊 Token 或稍後再試。")
+        else: st.error("🚨 掃描失敗。無法獲取該產業的歷史資料，請確認是否為 API 額度限制。")
