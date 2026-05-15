@@ -6,3 +6,4 @@ numpy
 tqdm
 requests
 scikit-learn
+beautifulsoup4
